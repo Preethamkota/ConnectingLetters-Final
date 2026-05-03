@@ -1,4 +1,5 @@
 import mediapipe as mp
+import cv2
 
 mp_face_mesh=mp.solutions.face_mesh
 
@@ -9,7 +10,8 @@ face_mesh = mp_face_mesh.FaceMesh(
 )
 
 def get_landmarks(frame):
-    landmarks=face_mesh.process(frame)
+    rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    landmarks=face_mesh.process(rgb_frame)
 
     if not landmarks.multi_face_landmarks:
         return None

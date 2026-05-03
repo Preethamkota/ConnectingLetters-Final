@@ -1,4 +1,4 @@
-import mediapipe as np
+import numpy as np
 from collections import deque
 import cv2
 
@@ -9,19 +9,46 @@ class GazeSmoother:
     def update(self,value):
         self.buffer.append(value)
         return sum(self.buffer)/len(self.buffer)
+
+class GazeCalibrator:
+    def __init__(self,window_size=8):
+        self.window_size = window_size
+        self.gaze_values = deque(maxlen=window_size)
+        self.yaw_values = deque(maxlen=window_size)
+        self.pitch_values = deque(maxlen=window_size)
+
+    def update(self,gaze_ratio,yaw,pitch):
+        self.gaze_values.append(gaze_ratio)
+        self.yaw_values.append(yaw)
+        self.pitch_values.append(pitch)
+
+    def ready(self):
+        return len(self.gaze_values) >= self.window_size
+
+    def baseline(self):
+        if not self.gaze_values:
+            return 0.5, 0.0, 0.0
+        return (
+            sum(self.gaze_values) / len(self.gaze_values),
+            sum(self.yaw_values) / len(self.yaw_values),
+            sum(self.pitch_values) / len(self.pitch_values),
+        )
     
 smoother=GazeSmoother(window_size=5)
+calibrator=GazeCalibrator(window_size=8)
 
 def compute_eye_ratio(landmarks,left_idx,right_idx,pupil_idx):
     left=landmarks[left_idx]
     right=landmarks[right_idx]
     pupil=landmarks[pupil_idx]
 
-    width=right.x-left.x
+    left_x = min(left.x,right.x)
+    right_x = max(left.x,right.x)
+    width=right_x-left_x
     if abs(width)<1e-6:
         return 0.5
     
-    ratio = (pupil.x - left.x)/width
+    ratio = (pupil.x - left_x)/width
     return max(0.0,min(1.0,ratio))
 
 def compute_gaze_ratio(landmarks):
@@ -80,9 +107,17 @@ def get_head_pose(landmarks, frame_shape):
     return yaw, pitch
 
 
-def is_focused(gaze_ratio,yaw,pitch,gaze_thresh=0.15,yaw_thresh=20,pitch_thresh=15):
-    eye_centered = abs(gaze_ratio-0.5)<gaze_thresh
-    head_forward = abs(yaw) < yaw_thresh and abs(pitch) < pitch_thresh
+def is_focused(gaze_ratio,yaw,pitch,gaze_thresh=0.25,yaw_thresh=35,pitch_thresh=30):
+    baseline_gaze, baseline_yaw, baseline_pitch = calibrator.baseline()
+
+    # Before calibration is full, use forgiving defaults so startup samples do not all become distracted.
+    if not calibrator.ready():
+        baseline_gaze = 0.5
+        baseline_yaw = 0.0
+        baseline_pitch = 0.0
+
+    eye_centered = abs(gaze_ratio-baseline_gaze)<gaze_thresh
+    head_forward = abs(yaw-baseline_yaw) < yaw_thresh and abs(pitch-baseline_pitch) < pitch_thresh
 
     return 1 if (eye_centered and head_forward) else 0
 
@@ -91,11 +126,17 @@ def get_gaze(landmarks,frame_shape):
     smooth_ratio=smoother.update(raw_ratio)
 
     yaw,pitch = get_head_pose(landmarks,frame_shape)
+    calibrator.update(smooth_ratio,yaw,pitch)
     focus=is_focused(smooth_ratio,yaw,pitch)
+    baseline_gaze, baseline_yaw, baseline_pitch = calibrator.baseline()
 
     return {
         "gaze_ratio":float(smooth_ratio),
         "yaw":float(yaw),
         "pitch":float(pitch),
-        "focused":int(focus)
+        "focused":int(focus),
+        "calibrated":bool(calibrator.ready()),
+        "baseline_gaze_ratio":float(baseline_gaze),
+        "baseline_yaw":float(baseline_yaw),
+        "baseline_pitch":float(baseline_pitch)
     }

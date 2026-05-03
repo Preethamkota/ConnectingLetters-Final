@@ -8,12 +8,25 @@ import { Application, Assets, Sprite, Text, TextStyle, Graphics } from "pixi.js"
 import { Popover } from "bootstrap";
 import instructions from "../assets/instructions.wav";
 import axios from "axios";
-import { startCapture,endCapture,assignInterval,assignUploadUrl,CaptureElements } from "../hooks/useCapture";
+import {
+  startCapture,
+  endCapture,
+  assignInterval,
+  assignUploadUrl,
+  assignAnalyzeUrl,
+  assignMetricsProvider,
+  assignAnalysisCallback,
+  getAnalysisSummary,
+  resetAnalysis,
+  CaptureElements
+} from "../hooks/useCapture";
 export default function Game() {
   const [searchParams] = useSearchParams();
   const appRef = useRef();
   const startTimeRef = useRef(null);
+  const responseStartRef = useRef(null);
   const triesRef = useRef(0);
+  const metricsRef = useRef(null);
   const navigate = useNavigate();
   const stack = [];
   const [tries, setTries] = useState(0);
@@ -23,7 +36,56 @@ export default function Game() {
   const [gameOver, setGameOver] = useState(false);
   const data = useRef();
   const circles = useRef([]);
-  
+  const [analysisSummary, setAnalysisSummary] = useState(getAnalysisSummary());
+  const [latestAnalysis, setLatestAnalysis] = useState(null);
+  const [metrics, setMetrics] = useState({
+    accuracy: 0,
+    totalAttempts: 0,
+    correctCount: 0,
+    incorrectCount: 0,
+    averageResponseTime: 0,
+    errorCount: 0,
+    totalResponseTime: 0
+  });
+  metricsRef.current = metrics;
+
+  async function loadLevelData(level, itemNumber) {
+    try {
+      const response = await axios.get(
+        `https://api.joywithlearning.com/api/connectingletters/${level}/${itemNumber}`,
+        { timeout: 5000 }
+      );
+      return response.data;
+    } catch (error) {
+      console.warn("Remote level data failed, using bundled level data.", error);
+      const localData = await import(`../levels/level${level}/item${itemNumber}.json`);
+      return localData.default;
+    }
+  }
+
+  function updateMetrics(result) {
+    const now = Date.now();
+    const elapsedSeconds = responseStartRef.current ? (now - responseStartRef.current) / 1000 : 0;
+    responseStartRef.current = now;
+
+    setMetrics((currentMetrics) => {
+      const totalAttempts = currentMetrics.totalAttempts + 1;
+      const correctCount = currentMetrics.correctCount + (result === "correct" ? 1 : 0);
+      const incorrectCount = currentMetrics.incorrectCount + (result === "incorrect" ? 1 : 0);
+      const errorCount = currentMetrics.errorCount + (result === "incorrect" ? 1 : 0);
+      const totalResponseTime = currentMetrics.totalResponseTime + elapsedSeconds;
+
+      return {
+        accuracy: totalAttempts === 0 ? 0 : (correctCount / totalAttempts) * 100,
+        totalAttempts,
+        correctCount,
+        incorrectCount,
+        averageResponseTime: totalAttempts === 0 ? 0 : totalResponseTime / totalAttempts,
+        errorCount,
+        totalResponseTime
+      };
+    });
+  }
 
   async function handleNext() {
     triesRef.current += tries;
@@ -39,6 +101,8 @@ export default function Game() {
       confetti();
       setGameOver(true);
       endCapture();
+      const finalAnalysisSummary = getAnalysisSummary();
+      setAnalysisSummary(finalAnalysisSummary);
       const gameId = searchParams.get("gameId");
       const therapistId = localStorage.getItem("therapistId");
       const childId = localStorage.getItem("childId");
@@ -46,6 +110,16 @@ export default function Game() {
         var c = await axios.post(`https://totalapi.joywithlearning.com/api/data/submitGameDetails/${gameId}/${childId}`, {
           tries: triesRef.current + tries,
           timer: (new Date() - startTimeRef.current) / 1000,
+          accuracy: Number(metrics.accuracy.toFixed(2)),
+          totalAttempts: metrics.totalAttempts,
+          correctCount: metrics.correctCount,
+          incorrectCount: metrics.incorrectCount,
+          averageResponseTime: Number(metrics.averageResponseTime.toFixed(2)),
+          errorCount: metrics.errorCount,
+          emotionAnalysis: finalAnalysisSummary.emotion,
+          gazeAnalysis: finalAnalysisSummary.gaze,
+          analysisSampleCount: finalAnalysisSummary.sampleCount,
+          failedAnalysisSampleCount: finalAnalysisSummary.failedSampleCount,
           status: "completed",
           therapistId: therapistId,
           datePlayed : new Date()
@@ -61,6 +135,23 @@ export default function Game() {
     setLvl(1);
     setItem(1);
     setGameOver(false);
+    setTries(0);
+    setCorrect(0);
+    triesRef.current = 0;
+    startTimeRef.current = new Date();
+    responseStartRef.current = new Date().getTime();
+    setMetrics({
+      accuracy: 0,
+      totalAttempts: 0,
+      correctCount: 0,
+      incorrectCount: 0,
+      averageResponseTime: 0,
+      errorCount: 0,
+      totalResponseTime: 0
+    });
+    resetAnalysis();
+    setAnalysisSummary(getAnalysisSummary());
+    setLatestAnalysis(null);
      // End current capture and start a new capture for the restart
     endCapture();
     navigate("/game?lvl=1")
@@ -92,6 +183,7 @@ export default function Game() {
         stack.pop();
         resetColor(Circle);
         setTries((tries) => tries + 1);
+        updateMetrics("incorrect");
         return false;
       }
       Circle.tint = "#FFFF00";
@@ -118,12 +210,14 @@ export default function Game() {
           elem.tint = "#00FF00";
         }
         setCorrect((correct) => correct + 1);
+        updateMetrics("correct");
         console.log(correct);
         return true;
       }
       Circle.tint = "#FFFF00";
     } else {
       setTries((tries) => tries + 1);
+      updateMetrics("incorrect");
       while (stack.length !== 0) {
         const elem = stack.pop();
         resetColor(elem);
@@ -148,7 +242,14 @@ export default function Game() {
     if (gameIdfromStorage && childIdfromStorage){
       assignUploadUrl(`https://totalapi.joywithlearning.com/api/data/imagecapture/${gameIdfromStorage}/${childIdfromStorage}`);
     }
-    assignInterval(5000); 
+    assignAnalyzeUrl(process.env.REACT_APP_ANALYZE_URL || "http://localhost:8000/analyze");
+    assignMetricsProvider(() => metricsRef.current || {});
+    assignAnalysisCallback((sample, summary) => {
+      setLatestAnalysis(sample);
+      setAnalysisSummary(summary);
+    });
+    assignInterval(3000);
+    resetAnalysis();
   }, []);
 
   useEffect(() => {
@@ -159,10 +260,8 @@ export default function Game() {
     if (!gameOver) {
       startCapture();
       (async () => {
-        // data.current = await (`../levels/level${lvl}/item${item}.json`);
-        const response = await axios.get(`https://api.joywithlearning.com/api/connectingletters/${lvl}/${item}`);
-        console.log(response);
-        data.current = response.data;
+        data.current = await loadLevelData(lvl, item);
+        responseStartRef.current = Date.now();
 
         const app = new Application();
         appRef.current = app;
@@ -281,6 +380,8 @@ export default function Game() {
         showModal={gameOver}
         setShowModal={setGameOver}
         handleRestart={handleRestart}
+        metrics={metrics}
+        analysisSummary={analysisSummary}
       />
       <div className="d-flex flex-column justify-content-center align-items-center pt-3">
         <div className="py-3 w-100">
@@ -347,6 +448,21 @@ export default function Game() {
                 </svg>
               </button>
             </div>
+          </div>
+          <div className="d-flex justify-content-around flex-wrap gap-3 w-100 pt-2">
+            <b className="fs-6">Accuracy {metrics.accuracy.toFixed(1)}%</b>
+            <b className="fs-6">Total Attempts {metrics.totalAttempts}</b>
+            <b className="fs-6">Correct / Incorrect {metrics.correctCount} / {metrics.incorrectCount}</b>
+            <b className="fs-6">Avg Response Time {metrics.averageResponseTime.toFixed(2)}s</b>
+            <b className="fs-6">Error Count {metrics.errorCount}</b>
+            <b className="fs-6">Focused {analysisSummary.gaze.percentTimeFocused.toFixed(1)}%</b>
+            <b className="fs-6">Emotion Samples {analysisSummary.sampleCount}</b>
+            {latestAnalysis && (
+              <b className="fs-6">
+                Gaze {latestAnalysis.focused ?? 0} / Yaw {(latestAnalysis.yaw ?? 0).toFixed(1)} /
+                Pitch {(latestAnalysis.pitch ?? 0).toFixed(1)}
+              </b>
+            )}
           </div>
         </div>
         <canvas id="board"></canvas>

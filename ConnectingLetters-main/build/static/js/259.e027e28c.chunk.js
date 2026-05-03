@@ -1,0 +1,1 @@
+"use strict";(self.webpackChunkconnectingletters=self.webpackChunkconnectingletters||[]).push([[259],{6259:e=>{e.exports=JSON.parse('[{"a":[0,190],"r":[1600,400]},{"z":[0,400],"s":[1600,200]},{"c":[0,600],"u":[1600,1050]},{"v":[0,840],"f":[1600,800]},{"k":[0,1020],"e":[1600,600]}]')}}]);
