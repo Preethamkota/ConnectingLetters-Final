@@ -37,6 +37,14 @@ class GazeCalibrator:
 smoother=GazeSmoother(window_size=5)
 calibrator=GazeCalibrator(window_size=8)
 
+
+def normalize_angle(angle):
+    return ((angle + 180.0) % 360.0) - 180.0
+
+
+def angular_distance(a, b):
+    return abs(normalize_angle(a - b))
+
 def compute_eye_ratio(landmarks,left_idx,right_idx,pupil_idx):
     left=landmarks[left_idx]
     right=landmarks[right_idx]
@@ -104,7 +112,7 @@ def get_head_pose(landmarks, frame_shape):
 
     pitch, yaw, roll = angles
 
-    return yaw, pitch
+    return normalize_angle(yaw), normalize_angle(pitch)
 
 
 def is_focused(gaze_ratio,yaw,pitch,gaze_thresh=0.25,yaw_thresh=35,pitch_thresh=30):
@@ -116,8 +124,11 @@ def is_focused(gaze_ratio,yaw,pitch,gaze_thresh=0.25,yaw_thresh=35,pitch_thresh=
         baseline_yaw = 0.0
         baseline_pitch = 0.0
 
-    eye_centered = abs(gaze_ratio-baseline_gaze)<gaze_thresh
-    head_forward = abs(yaw-baseline_yaw) < yaw_thresh and abs(pitch-baseline_pitch) < pitch_thresh
+    eye_centered = abs(gaze_ratio-baseline_gaze) < gaze_thresh
+    head_forward = (
+        angular_distance(yaw, baseline_yaw) < yaw_thresh
+        and angular_distance(pitch, baseline_pitch) < pitch_thresh
+    )
 
     return 1 if (eye_centered and head_forward) else 0
 

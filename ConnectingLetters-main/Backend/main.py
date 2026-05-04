@@ -17,7 +17,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-from f_model.extract_landmarks_runtime import get_landmarks
+from f_model.extract_landmarks_runtime import get_landmarks, get_face_mesh_status
 from gaze.gaze import get_gaze
 from cnn_final.model import build_model   # make sure path is correct
 
@@ -27,7 +27,7 @@ BASE_DIR = Path(__file__).resolve().parent
 
 model = build_model(device)
 model_path = BASE_DIR / "cnn_final" / "best_phase2.pt"
-checkpoint = torch.load(model_path, map_location=device)
+checkpoint = torch.load(model_path, map_location=device, weights_only=False)
 state_dict = checkpoint.get("model_state_dict", checkpoint)
 model.load_state_dict(state_dict)
 model.eval()
@@ -64,23 +64,6 @@ async def analyze(image: UploadFile = File(...), metrics: str = Form("{}")):
         if frame is None:
             return {"error": "invalid image"}
 
-        # -------- LANDMARKS --------
-        landmarks = get_landmarks(frame)
-
-        if landmarks is None:
-            return {
-                "focused": 0,
-                "emotion": None,
-                "gaze_ratio": None,
-                "yaw": None,
-                "pitch": None,
-                "metrics": metrics_data,
-                "error": "face not detected"
-            }
-
-        # -------- GAZE --------
-        gaze_data = get_gaze(landmarks, frame.shape)
-
         # -------- EMOTION (CNN) --------
         input_tensor = preprocess_image(frame).to(device)
 
@@ -88,9 +71,31 @@ async def analyze(image: UploadFile = File(...), metrics: str = Form("{}")):
             outputs = model(input_tensor)
             emotion = int(torch.argmax(outputs, dim=1).item())
 
-        # The trained model has 4 output classes. Map them to the report labels used by the game.
-        emotion_map = ["happy", "confused", "frustrated", "neutral"]
+        # Keep runtime labels aligned with cnn_final/dataset.py class_to_idx.
+        emotion_map = ["confused", "frustrated", "happy", "neutral"]
         emotion_label = emotion_map[emotion]
+
+        # -------- LANDMARKS --------
+        landmarks = get_landmarks(frame)
+        face_mesh_status = get_face_mesh_status()
+
+        if landmarks is None:
+            return {
+                "focused": 0,
+                "emotion": emotion,
+                "emotion_label": emotion_label,
+                "gaze_ratio": None,
+                "yaw": None,
+                "pitch": None,
+                "metrics": metrics_data,
+                "landmarks_detected": False,
+                "face_mesh_available": face_mesh_status["available"],
+                "face_mesh_error": face_mesh_status["error"],
+                "error": "face not detected" if face_mesh_status["available"] else "face mesh unavailable",
+            }
+
+        # -------- GAZE --------
+        gaze_data = get_gaze(landmarks, frame.shape)
 
         return {
             "focused": gaze_data["focused"],
@@ -99,7 +104,10 @@ async def analyze(image: UploadFile = File(...), metrics: str = Form("{}")):
             "pitch": gaze_data["pitch"],
             "emotion": emotion,
             "emotion_label": emotion_label,
-            "metrics": metrics_data
+            "metrics": metrics_data,
+            "landmarks_detected": True,
+            "face_mesh_available": face_mesh_status["available"],
+            "face_mesh_error": face_mesh_status["error"],
         }
 
     except Exception as e:
@@ -110,4 +118,8 @@ async def analyze(image: UploadFile = File(...), metrics: str = Form("{}")):
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "device": str(device)}
+    return {
+        "status": "ok",
+        "device": str(device),
+        "face_mesh": get_face_mesh_status(),
+    }

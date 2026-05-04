@@ -1,0 +1,10 @@
+.venv/
+.venv310/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+ConnectingLetters-main/Backend/.venv/
+ConnectingLetters-main/Backend/.venv310/
+ConnectingLetters-main/Backend/__pycache__/
