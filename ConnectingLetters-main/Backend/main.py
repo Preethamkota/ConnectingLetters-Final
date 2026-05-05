@@ -7,6 +7,7 @@ import cv2
 import json
 import torch
 import torch.nn as nn
+from mongo import save_result
 
 app = FastAPI()
 app.add_middleware(
@@ -80,7 +81,7 @@ async def analyze(image: UploadFile = File(...), metrics: str = Form("{}")):
         face_mesh_status = get_face_mesh_status()
 
         if landmarks is None:
-            return {
+            result= {
                 "focused": 0,
                 "emotion": emotion,
                 "emotion_label": emotion_label,
@@ -92,12 +93,15 @@ async def analyze(image: UploadFile = File(...), metrics: str = Form("{}")):
                 "face_mesh_available": face_mesh_status["available"],
                 "face_mesh_error": face_mesh_status["error"],
                 "error": "face not detected" if face_mesh_status["available"] else "face mesh unavailable",
+                "landmarks":landmarks.tolist() if landmarks is not None else None
             }
+            save_result(result)
+            return result
 
         # -------- GAZE --------
         gaze_data = get_gaze(landmarks, frame.shape)
 
-        return {
+        result= {
             "focused": gaze_data["focused"],
             "gaze_ratio": gaze_data["gaze_ratio"],
             "yaw": gaze_data["yaw"],
@@ -108,12 +112,17 @@ async def analyze(image: UploadFile = File(...), metrics: str = Form("{}")):
             "landmarks_detected": True,
             "face_mesh_available": face_mesh_status["available"],
             "face_mesh_error": face_mesh_status["error"],
+            "landmarks":landmarks.tolist() if landmarks is not None else None
         }
+        save_result(result)
+        return result
 
     except Exception as e:
         return {
             "error": str(e)
         }
+
+
 
 
 @app.get("/health")
